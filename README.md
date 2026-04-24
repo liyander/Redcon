@@ -243,5 +243,3 @@ python main.py -t 192.168.10.15 -u 'svc_account' -p 'Sect0r3X' --auto -v
 
 ## Future Expansion
 This modular architecture is designed to expand. Future iterations will include modules for core AD vectors such as Kerberos querying (e.g., AS-REP Roasting), and detailed RPC-based enumeration.
-#   R e d c o n  
- 
