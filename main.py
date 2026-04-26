@@ -31,7 +31,6 @@ BANNER = f"""
      Modular Recon & Enumeration Framework    v1.0
      Protocols: SMB | LDAP | WinRM | FTP | MSSQL | SSH
      Modules  : ADCS | AS-REP Roast | Port Scanner
-     Author   : @CyberGhost05
     ──────────────────────────────────────────────────────
 {RESET}"""
 

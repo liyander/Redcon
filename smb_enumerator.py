@@ -2,7 +2,7 @@ import logging
 from impacket.smbconnection import SMBConnection, SessionError
 from impacket.dcerpc.v5.rpcrt import DCERPC_v5
 from impacket.dcerpc.v5 import transport, samr
-
+# test
 class SMBEnumerator:
     def __init__(self, target, username='', password='', domain='', lmhash='', nthash='', port=445):
         self.target = target

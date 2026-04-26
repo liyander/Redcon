@@ -4,7 +4,7 @@ try:
     from pypsrp.exceptions import AuthenticationError, WSManFaultError
 except ImportError:
     Client = None
-
+# test
 class WinRMEnumerator:
     def __init__(self, target, username='', password='', domain='', lmhash='', nthash='', port=5985, use_ssl=False):
         self.target = target

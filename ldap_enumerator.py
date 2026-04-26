@@ -1,6 +1,6 @@
 import logging
 from impacket.ldap import ldap as ldap_impacket
-
+# test
 class LDAPEnumerator:
     def __init__(self, target, domain='', username='', password='', lmhash='', nthash='', port=389, use_ssl=False):
         self.target = target

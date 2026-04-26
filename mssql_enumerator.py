@@ -1,6 +1,6 @@
 import logging
 from impacket import tds
-
+# test
 class MSSQLEnumerator:
     def __init__(self, target, username='', password='', domain='', lmhash='', nthash='', port=1433, db='', windows_auth=True):
         self.target = target
