@@ -11,5 +11,7 @@ from .mssql_enumerator import MSSQLEnumerator
 from .adcs_enumerator import ADCSEnumerator
 from .ssh_enumerator import SSHEnumerator
 from .port_scanner import PortScanner
+from .https_enumerator import HTTPSEnumerator
+from .api_enumerator import APIEnumerator
 
-__all__ = ['SMBEnumerator', 'LDAPEnumerator', 'WinRMEnumerator', 'FTPEnumerator', 'MSSQLEnumerator', 'ADCSEnumerator', 'SSHEnumerator', 'PortScanner']
+__all__ = ['SMBEnumerator', 'LDAPEnumerator', 'WinRMEnumerator', 'FTPEnumerator', 'MSSQLEnumerator', 'ADCSEnumerator', 'SSHEnumerator', 'PortScanner', 'HTTPSEnumerator', 'APIEnumerator']
