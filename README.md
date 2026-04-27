@@ -1,6 +1,6 @@
-# Active Directory Enumeration Tool
+# Active Directory Enumeration Tool (Redcon)
 
-A standalone Active Directory enumeration utility written in Python. This tool connects to target machines natively using `impacket` to gather information without relying heavily on large frameworks.
+A comprehensive modular enumeration and reconnaissance framework written in Python. This tool connects to target machines natively using standard libraries and `impacket` to gather intelligence across Active Directory domains, web services, APIs, and Linux systems without relying on heavy frameworks.
 
 ## Current Capabilities
 
@@ -81,6 +81,35 @@ A standalone Active Directory enumeration utility written in Python. This tool c
   - Multi-threaded fast port scanning of common AD/Linux protocols.
   - Basic banner grabbing with automated HTTP/HTTPs Server header filtering to discover underlying services natively.
 
+### **HTTPS/TLS Enumeration Module**
+- **Capabilities:**
+  - Extract detailed SSL/TLS certificate information (Subject, Issuer, Serial Number, Validity).
+  - Identify Subject Alternative Names (SANs) for domain discovery.
+  - Check for certificate vulnerabilities:
+    - Self-signed certificates
+    - Expired certificates
+    - Wildcard certificates
+    - Weak issuers
+  - Retrieve server banner and HTTP headers (Server, X-Powered-By, etc.).
+  - Enumerate supported SSL/TLS protocol versions (detect deprecated/vulnerable protocols).
+  - Verify HTTP to HTTPS redirect configuration.
+
+### **API Enumeration Module**
+- **Authentication Methods Supported:**
+  - Anonymous access
+  - Basic Authentication (Username & Password)
+- **Capabilities:**
+  - Discover common API paths (`/api`, `/api/v1`, `/swagger`, `/openapi.json`, `/graphql`, etc.).
+  - Enumerate common API endpoints (`/users`, `/admin`, `/auth`, `/products`, etc.).
+  - Check for common API vulnerabilities:
+    - Missing authentication on sensitive endpoints
+    - CORS misconfiguration (Allow-Origin: *, overly permissive headers)
+    - Exposed API documentation (Swagger, OpenAPI, API Docs)
+    - Debug endpoints exposure (`/actuator`, `/health`, `/debug`)
+  - Test for default API credentials (admin/admin, user/user, etc.).
+  - Identify API version from endpoint responses.
+  - Support for both HTTP and HTTPS protocols with custom ports.
+
 ## Prerequisites & Installation
 
 The primary dependencies for this tool are the `impacket` and `pypsrp` libraries. Ensure you have Python installed and run the following to install them:
@@ -132,6 +161,20 @@ python main.py -h
 - `--sql-auth`: Force the connection to use standard SQL Server Authentication instead of Active Directory Windows Authentication.
 - `--db-list`: List available databases on the MSSQL server.
 - `-q`, `--query`: Execute a raw SQL query and print the tabular results.
+- `--https`: Flag to execute HTTPS/TLS certificate enumeration.
+- `--https-port`: Custom port for HTTPS (defaults to 443).
+- `--cert-info`: Extract detailed SSL/TLS certificate information.
+- `--cert-vulns`: Check for SSL/TLS certificate vulnerabilities.
+- `--ssl-protocols`: Check supported SSL/TLS protocol versions (detect deprecated protocols).
+- `--server-banner`: Grab server banner and HTTP headers from HTTPS endpoint.
+- `--api`: Flag to execute API enumeration checks.
+- `--api-port`: Custom port for API enumeration (defaults to 443).
+- `--api-protocol`: Set API protocol to `http` or `https` (defaults to https).
+- `--api-paths`: Discover common API paths (`/api`, `/swagger`, `/openapi.json`, etc.).
+- `--api-endpoints`: Discover common API endpoints (`/users`, `/admin`, `/products`, etc.).
+- `--api-vulns`: Check for common API vulnerabilities (missing auth, CORS, exposed docs).
+- `--api-creds`: Test for default API credentials.
+- `--api-all`: Execute all API enumeration checks at once.
 
 ## Examples
 
@@ -235,11 +278,57 @@ To sweep the entire 1-65535 TCP port range aggressively:
 python main.py -t 192.168.1.100 --all-ports
 ```
 
-### 16. Auto-Enumeration Pilot
+### 16. HTTPS/TLS Certificate Enumeration
+Extract certificate information and check for vulnerabilities:
+```bash
+python main.py -t 192.168.1.100 --cert-info --cert-vulns
+```
+Or run all HTTPS checks at once:
+```bash
+python main.py -t 192.168.1.100 --https
+```
+
+### 17. HTTPS Server Banner Grabbing
+Grab server banner and HTTP headers from HTTPS endpoint:
+```bash
+python main.py -t 192.168.1.100 --server-banner
+```
+
+### 18. Check Supported SSL/TLS Protocols
+Identify supported protocol versions and detect deprecated/vulnerable ones:
+```bash
+python main.py -t 192.168.1.100 --ssl-protocols
+```
+
+### 19. API Path and Endpoint Discovery
+Discover common API paths and endpoints:
+```bash
+python main.py -t 192.168.1.100 --api-paths --api-endpoints
+```
+
+### 20. API Vulnerability Scanning
+Check for common API vulnerabilities (missing auth, CORS, exposed documentation):
+```bash
+python main.py -t 192.168.1.100 --api-vulns
+```
+
+### 21. Test API Default Credentials
+Test for default credentials on API endpoints:
+```bash
+python main.py -t 192.168.1.100 --api-creds
+```
+
+### 22. Comprehensive API Enumeration
+Run all API enumeration checks with custom port and authentication:
+```bash
+python main.py -t 192.168.1.100 --api-port 8080 --api-protocol http -u admin -p 'Password123!' --api-all
+```
+
+### 23. Auto-Enumeration Pilot
 Provide one set of standard credentials and automatically sweep the host, executing related modules universally across the network topology dynamically depending on what services are actually online:
 ```bash
 python main.py -t 192.168.10.15 -u 'svc_account' -p 'Sect0r3X' --auto -v
 ```
 
 ## Future Expansion
-This modular architecture is designed to expand. Future iterations will include modules for core AD vectors such as Kerberos querying (e.g., AS-REP Roasting), and detailed RPC-based enumeration.
+This modular architecture is designed to expand. Future iterations will include modules for core AD vectors such as Kerberos querying (e.g., Kerberoasting), advanced RPC-based enumeration, WebDAV exploitation, DNS enumeration, and additional cloud platform assessments.

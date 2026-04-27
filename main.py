@@ -9,6 +9,8 @@ from mssql_enumerator import MSSQLEnumerator
 from adcs_enumerator import ADCSEnumerator
 from ssh_enumerator import SSHEnumerator
 from port_scanner import PortScanner
+from https_enumerator import HTTPSEnumerator
+from api_enumerator import APIEnumerator
 
 # Enable ANSI colors on Windows
 os.system("") 
@@ -29,7 +31,7 @@ BANNER = f"""
 {RESET}{GREY}
     ──────────────────────────────────────────────────────
      Modular Recon & Enumeration Framework    v1.0
-     Protocols: SMB | LDAP | WinRM | FTP | MSSQL | SSH
+     Protocols: SMB | LDAP | WinRM | FTP | MSSQL | SSH | HTTPS | API
      Modules  : ADCS | AS-REP Roast | Port Scanner
     ──────────────────────────────────────────────────────
 {RESET}"""
@@ -80,6 +82,24 @@ def main():
     parser.add_argument('--ssh-port', type=int, default=22, help="SSH Port (default: 22)")
     parser.add_argument('--ssh-key', type=str, help="Path to an SSH Private Key file for authentication")
     parser.add_argument('--linux-enum', action='store_true', help="Perform Linux PE enumeration (Sudo, SUID, Cron, Context) over SSH")
+
+    # HTTPS Arguments
+    parser.add_argument('--https', action='store_true', help="Enumerate HTTPS/TLS certificate information and vulnerabilities")
+    parser.add_argument('--https-port', type=int, default=443, help="HTTPS Port (default: 443)")
+    parser.add_argument('--cert-info', action='store_true', help="Extract detailed SSL/TLS certificate information")
+    parser.add_argument('--cert-vulns', action='store_true', help="Check for SSL/TLS certificate vulnerabilities")
+    parser.add_argument('--ssl-protocols', action='store_true', help="Check supported SSL/TLS protocols and versions")
+    parser.add_argument('--server-banner', action='store_true', help="Grab server banner and HTTP headers")
+
+    # API Arguments
+    parser.add_argument('--api', action='store_true', help="Enumerate API endpoints and check for vulnerabilities")
+    parser.add_argument('--api-port', type=int, default=443, help="API Port (default: 443)")
+    parser.add_argument('--api-protocol', choices=['http', 'https'], default='https', help="API Protocol (default: https)")
+    parser.add_argument('--api-paths', action='store_true', help="Discover common API paths (/api, /swagger, etc.)")
+    parser.add_argument('--api-endpoints', action='store_true', help="Discover common API endpoints (/users, /admin, etc.)")
+    parser.add_argument('--api-vulns', action='store_true', help="Check for common API vulnerabilities")
+    parser.add_argument('--api-creds', action='store_true', help="Test for default API credentials")
+    parser.add_argument('--api-all', action='store_true', help="Run all API enumeration checks")
 
     # Port Scanner Arguments
     parser.add_argument('--scan-ports', action='store_true', help="Scan the target for common open ports and grab their service banners")
@@ -160,9 +180,16 @@ def main():
             # WinRM detection
             if port in [5985, 5986] or 'wsman' in banner:
                 detected_services.add('winrm')
-            # HTTP detection
+            # HTTPS detection
+            if port in [443, 8443] or 'https' in banner or 'ssl' in banner or 'tls' in banner:
+                detected_services.add('https')
+                args.https_port = port
+            # HTTP/API detection
             if port in [80, 443, 8080, 8443, 8000, 5173, 4000] or 'http' in banner or 'server:' in banner or 'werkzeug' in banner or 'nginx' in banner or 'apache' in banner:
                 detected_services.add('http')
+                if port in [8080, 8443, 8000, 5173, 4000]:
+                    detected_services.add('api')
+                    args.api_port = port
 
         # Map detected services to enumeration modules
         if 'smb' in detected_services:
@@ -188,6 +215,13 @@ def main():
         if 'winrm' in detected_services and has_creds:
             print(f" {BLUE}[Auto] WinRM Detected -> Selecting WinRM whoami check{RESET}")
             args.execute = "whoami /all"
+        if 'https' in detected_services:
+            print(f" {BLUE}[Auto] HTTPS Detected (port {args.https_port}) -> Selecting Certificate Enumeration{RESET}")
+            args.https = True
+        if 'api' in detected_services:
+            print(f" {BLUE}[Auto] API Service Detected (port {args.api_port}) -> Selecting API Enumeration{RESET}")
+            args.api_all = True
+            args.api_port = args.api_port if hasattr(args, 'api_port') else 443
         if 'http' in detected_services:
             http_ports = [r['port'] for r in scan_results if r['port'] in [80, 443, 8080, 8443, 8000, 5173, 4000] or any(kw in r.get('banner','').lower() for kw in ['http', 'server:', 'werkzeug', 'nginx', 'apache'])]
             print(f" {BLUE}[Auto] HTTP Services Detected on ports: {http_ports}{RESET}")
@@ -398,7 +432,7 @@ def main():
     if args.linux_enum:
         # Get list of all SSH ports to enumerate (auto mode collects multiple)
         ssh_ports_to_scan = getattr(args, '_ssh_ports_list', [args.ssh_port])
-        
+
         for ssh_port in ssh_ports_to_scan:
             try:
                 print(f"\n{BLUE}[*] Starting Linux Enumeration on SSH port {ssh_port}{RESET}")
@@ -416,6 +450,134 @@ def main():
                     print(f"{RED}[-] Failed to connect to target via SSH on port {ssh_port}.{RESET}")
             except Exception as e:
                 print(f"{RED}[-] SSH Enumeration Error on port {ssh_port}: {e}{RESET}")
+
+    # 8. HTTPS ENUMERATION
+    if args.https or args.cert_info or args.cert_vulns or args.ssl_protocols or args.server_banner:
+        try:
+            print(f"\n{BLUE}[*] Starting HTTPS/TLS Enumeration:{RESET}")
+            https_enum = HTTPSEnumerator(
+                target=args.target,
+                port=args.https_port
+            )
+            if https_enum.connect():
+                # Get certificate info
+                if args.cert_info or args.https:
+                    print(f"\n{BLUE}[*] Extracting Certificate Information:{RESET}")
+                    cert_info = https_enum.get_certificate_info()
+                    for k, v in cert_info.items():
+                        print(f"    {BLUE}{k}{RESET}: {RED}{v}{RESET}")
+
+                # Check certificate vulnerabilities
+                if args.cert_vulns or args.https:
+                    print(f"\n{BLUE}[*] Checking Certificate Vulnerabilities:{RESET}")
+                    vulns = https_enum.check_certificate_vulnerabilities()
+                    for k, v in vulns.items():
+                        print(f"    {BLUE}{k}{RESET}: {RED}{v}{RESET}")
+
+                # Get server banner
+                if args.server_banner or args.https:
+                    print(f"\n{BLUE}[*] Grabbing Server Banner:{RESET}")
+                    banner = https_enum.get_server_banner()
+                    for k, v in banner.items():
+                        if v != 'N/A':
+                            print(f"    {BLUE}{k}{RESET}: {RED}{v}{RESET}")
+
+                # Check SSL/TLS protocols
+                if args.ssl_protocols:
+                    print(f"\n{BLUE}[*] Checking Supported SSL/TLS Protocols:{RESET}")
+                    protocols = https_enum.get_ssl_protocols()
+                    for proto, status in protocols.items():
+                        color = RED if 'SUPPORTED' in status else GREEN
+                        print(f"    {BLUE}{proto}{RESET}: {color}{status}{RESET}")
+
+                # Check HTTPS redirect
+                print(f"\n{BLUE}[*] Checking HTTP to HTTPS Redirect:{RESET}")
+                redirect = https_enum.check_https_redirect()
+                if redirect:
+                    print(f"    {GREEN}[+] HTTP redirects to HTTPS{RESET}")
+                elif redirect is False:
+                    print(f"    {RED}[-] HTTP does NOT redirect to HTTPS{RESET}")
+                else:
+                    print(f"    {GREY}[*] HTTP port not accessible or no redirect info{RESET}")
+
+                https_enum.close()
+            else:
+                print(f"{RED}[-] Failed to connect to target via HTTPS.{RESET}")
+        except Exception as e:
+            print(f"{RED}[-] HTTPS Enumeration Error: {e}{RESET}")
+
+    # 9. API ENUMERATION
+    if args.api or args.api_paths or args.api_endpoints or args.api_vulns or args.api_creds or args.api_all:
+        try:
+            print(f"\n{BLUE}[*] Starting API Enumeration:{RESET}")
+            api_enum = APIEnumerator(
+                target=args.target,
+                port=args.api_port,
+                protocol=args.api_protocol,
+                username=args.username,
+                password=args.password
+            )
+            if api_enum.connect():
+                # If api_all is set, enable all options
+                if args.api_all:
+                    args.api_paths = True
+                    args.api_endpoints = True
+                    args.api_vulns = True
+                    args.api_creds = True
+
+                # Discover API paths
+                if args.api_paths or args.api:
+                    print(f"\n{BLUE}[*] Discovering API Paths:{RESET}")
+                    paths = api_enum.discover_api_paths()
+                    if paths:
+                        for path_info in paths:
+                            print(f"    {GREEN}[+]{RESET} {path_info['path']} (Status: {path_info['status']}, Type: {path_info['content_type']})")
+                    else:
+                        print(f"    {GREY}[-] No common API paths found{RESET}")
+
+                # Discover API endpoints
+                if args.api_endpoints or args.api:
+                    print(f"\n{BLUE}[*] Discovering API Endpoints:{RESET}")
+                    endpoints = api_enum.discover_endpoints()
+                    if endpoints:
+                        for endpoint_info in endpoints:
+                            print(f"    {GREEN}[+]{RESET} {endpoint_info['path']} (Status: {endpoint_info['status']})")
+                    else:
+                        print(f"    {GREY}[-] No common endpoints found{RESET}")
+
+                # Check API vulnerabilities
+                if args.api_vulns or args.api:
+                    print(f"\n{BLUE}[*] Checking for API Vulnerabilities:{RESET}")
+                    vulns = api_enum.check_api_vulnerabilities()
+                    for vuln_type, description in vulns.items():
+                        if 'No Major Issues' not in vuln_type:
+                            print(f"    {RED}[!] {vuln_type}{RESET}: {description}")
+                        else:
+                            print(f"    {GREEN}[+] {vuln_type}{RESET}")
+
+                # Test for default credentials
+                if args.api_creds or args.api_all:
+                    print(f"\n{BLUE}[*] Testing for Default Credentials:{RESET}")
+                    creds = api_enum.test_default_credentials()
+                    for cred, status in creds.items():
+                        if 'VALID' in status:
+                            print(f"    {RED}[!] Found: {cred} - {status}{RESET}")
+                        else:
+                            print(f"    {GREEN}[+] {status}{RESET}")
+
+                # Get API version
+                print(f"\n{BLUE}[*] Identifying API Version:{RESET}")
+                version = api_enum.get_api_version()
+                if version:
+                    print(f"    {GREEN}[+] API Version: {version}{RESET}")
+                else:
+                    print(f"    {GREY}[-] Could not determine API version{RESET}")
+
+                api_enum.close()
+            else:
+                print(f"{RED}[-] Failed to connect to target for API enumeration.{RESET}")
+        except Exception as e:
+            print(f"{RED}[-] API Enumeration Error: {e}{RESET}")
 
     print(f"\n{BLUE}[*] Enumeration Complete.{RESET}")
 
