@@ -122,6 +122,69 @@ class SMBEnumerator:
             self.logger.error(f"Error enumerating password policy: {e}")
             return None
 
+    def enumerate_users(self):
+        """Connect to SAMR via SMB transport and enumerate users."""
+        self.logger.info("Attempting to enumerate users via SAMR over SMB...")
+        users_list = []
+        try:
+            rpctransport = transport.SMBTransport(
+                self.target,
+                self.port,
+                r'\samr',
+                self.username,
+                self.password,
+                self.domain,
+                self.lmhash,
+                self.nthash,
+            )
+            dce = DCERPC_v5(rpctransport)
+            dce.connect()
+            dce.bind(samr.MSRPC_UUID_SAMR)
+
+            resp = samr.hSamrConnect(dce)
+            server_handle = resp['ServerHandle']
+
+            resp2 = samr.hSamrEnumerateDomainsInSamServer(dce, serverHandle=server_handle)
+            domains = resp2['Buffer']['Buffer']
+            
+            for domain in domains:
+                domain_name = domain['Name']
+                
+                resp3 = samr.hSamrLookupDomainInSamServer(dce, serverHandle=server_handle, name=domain_name)
+                # Ensure we have the right domain ID access
+                resp4 = samr.hSamrOpenDomain(dce, serverHandle=server_handle, desiredAccess=samr.MAXIMUM_ALLOWED, domainId=resp3['DomainId'])
+                domain_handle = resp4['DomainHandle']
+
+                # Enumerate users
+                status = samr.STATUS_MORE_ENTRIES
+                enumerationContext = 0
+                while status == samr.STATUS_MORE_ENTRIES:
+                    try:
+                        resp_users = samr.hSamrEnumerateUsersInDomain(dce, domainHandle=domain_handle, enumerationContext=enumerationContext)
+                        status = resp_users['ErrorCode']
+                        enumerationContext = resp_users['EnumerationContext']
+                    except Exception as e:
+                        if "STATUS_MORE_ENTRIES" in str(e):
+                            resp_users = e.get_packet()
+                            status = samr.STATUS_MORE_ENTRIES
+                            enumerationContext = resp_users['EnumerationContext']
+                        else:
+                            raise e
+
+                    for user in resp_users['Buffer']['Buffer']:
+                        users_list.append({'domain': domain_name, 'username': user['Name'], 'rid': user['RelativeId']})
+                        self.logger.info(f"Found User via SAMR: {domain_name}\\{user['Name']} (RID: {user['RelativeId']})")
+
+                    if status != samr.STATUS_MORE_ENTRIES:
+                        break
+
+            dce.disconnect()
+            return users_list
+
+        except Exception as e:
+            self.logger.error(f"Error enumerating users over SMB: {e}")
+            return users_list
+
     def close(self):
         """Close the SMB connection."""
         if self.smb_conn:

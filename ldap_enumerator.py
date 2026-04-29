@@ -43,8 +43,25 @@ class LDAPEnumerator:
                 self.ldap_conn.login('', '', '', '', '')
             else:
                 self.logger.info(f"Authenticating as {self.domain}\\{self.username}...")
-                self.ldap_conn.login(self.username, self.password, self.domain, self.lmhash, self.nthash)
-            
+                try:
+                    self.ldap_conn.login(self.username, self.password, self.domain, self.lmhash, self.nthash)
+                except Exception as e:
+                    self.logger.warning(f"Primary authentication failed: {e}")
+                    self.logger.info("Falling back to Simple Bind (like ldapsearch -x)...")
+                    try:
+                        # Attempt Simple Bind using Impacket
+                        bind_dn = self.username
+                        if self.domain and '\\' not in bind_dn and '@' not in bind_dn:
+                            bind_dn = f"{self.domain}\\{self.username}"
+                        self.ldap_conn.login(bind_dn, self.password, authenticationChoice='simple')
+                    except TypeError:
+                        # Some versions of impacket don't take authenticationChoice directly here or expect simple bind differently
+                        self.ldap_conn.login(bind_dn, self.password, '','')
+                    except Exception as fallback_e:
+                        self.logger.warning(f"Simple Bind fallback failed: {fallback_e}")
+                        self.logger.info("Falling back to Anonymous Bind...")
+                        self.ldap_conn.login('', '', '', '', '')
+
             self.logger.info("Successfully connected and authenticated via LDAP.")
             return True
 

@@ -11,6 +11,10 @@ from ssh_enumerator import SSHEnumerator
 from port_scanner import PortScanner
 from https_enumerator import HTTPSEnumerator
 from api_enumerator import APIEnumerator
+from subfinder_enumerator import SubfinderEnumerator
+from dns_enumerator import DNSEnumerator
+from snmp_enumerator import SNMPEnumerator
+from rdp_enumerator import RDPEnumerator
 
 # Enable ANSI colors on Windows
 os.system("") 
@@ -31,7 +35,7 @@ BANNER = f"""
 {RESET}{GREY}
     ──────────────────────────────────────────────────────
      Modular Recon & Enumeration Framework    v1.0
-     Protocols: SMB | LDAP | WinRM | FTP | MSSQL | SSH | HTTPS | API
+     Protocols: SMB  | LDAP | WinRM | FTP | MSSQL | SSH | HTTPS | API
      Modules  : ADCS | AS-REP Roast | Port Scanner
     ──────────────────────────────────────────────────────
 {RESET}"""
@@ -46,12 +50,14 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument('-t', '--target', required=True, help="Target IP or hostname")
+    parser.add_argument('--protocols', type=str, help="Comma-separated list of protocols to execute (e.g., smb,ldap,mssql,ftp,ssh,winrm,https,api,adcs,subfinder,dns,snmp,rdp)")
     parser.add_argument('-u', '--username', default='', help="Username for authentication (default: anonymous)")
     parser.add_argument('-p', '--password', default='', help="Password for authentication")
     parser.add_argument('-d', '--domain', default='', help="Domain for authentication")
     parser.add_argument('--hashes', default='', help="NTLM hashes, format is LMHASH:NTHASH")
     parser.add_argument('--shares', action='store_true', help="Enumerate SMB shares")
     parser.add_argument('--policy', action='store_true', help="Enumerate Domain Password Policy via SAMR")
+    parser.add_argument('--smb-users', action='store_true', help="Enumerate Domain Users via SAMR over SMB")
     parser.add_argument('--smb-port', type=int, default=445, help="SMB Port (default: 445)")
     parser.add_argument('--users', action='store_true', help="Enumerate Domain Users via LDAP")
     parser.add_argument('--computers', action='store_true', help="Enumerate Domain Computers via LDAP")
@@ -101,6 +107,13 @@ def main():
     parser.add_argument('--api-creds', action='store_true', help="Test for default API credentials")
     parser.add_argument('--api-all', action='store_true', help="Run all API enumeration checks")
 
+    # Domain / Subdomain Enumeration Arguments
+    parser.add_argument('--subfinder', action='store_true', help="Run subdomain enumeration (crt.sh, hackertarget)")
+    parser.add_argument('--dns-enum', action='store_true', help="Run DNS enumeration (AXFR, basic checks)")
+    parser.add_argument('--snmp-enum', action='store_true', help="Run SNMP enumeration")
+    parser.add_argument('--snmp-community', type=str, default='public', help="Community string for SNMP")
+    parser.add_argument('--rdp-enum', action='store_true', help="Run RDP enumeration/checks")
+
     # Port Scanner Arguments
     parser.add_argument('--scan-ports', action='store_true', help="Scan the target for common open ports and grab their service banners")
     parser.add_argument('--all-ports', action='store_true', help="Scan all 65535 TCP ports instead of just common ones (combines with --scan-ports)")
@@ -108,6 +121,40 @@ def main():
     parser.add_argument('--auto', action='store_true', help="Automatically run Port Scanner and trigger subsequent enumeration actions based on open ports found.")
 
     args = parser.parse_args()
+
+    if args.protocols:
+        protos = [str(p).strip().lower() for p in args.protocols.split(",")]
+        if 'smb' in protos:
+            args.shares = True
+            args.policy = True
+            args.smb_users = True
+        if 'ldap' in protos:
+            args.users = True
+            args.computers = True
+            args.asreproast = True
+            args.adcs = True
+        if 'mssql' in protos:
+            args.db_list = True
+        if 'ftp' in protos:
+            args.ls = "/"
+        if 'ssh' in protos:
+            args.linux_enum = True
+        if 'winrm' in protos:
+            pass # Requires command input
+        if 'https' in protos:
+            args.https = True
+        if 'api' in protos:
+            args.api_all = True
+        if 'adcs' in protos:
+            args.adcs = True
+        if 'subfinder' in protos:
+            args.subfinder = True
+        if 'dns' in protos:
+            args.dns_enum = True
+        if 'snmp' in protos:
+            args.snmp_enum = True
+        if 'rdp' in protos:
+            args.rdp_enum = True
 
     lmhash = ''
     nthash = ''
@@ -196,6 +243,7 @@ def main():
             print(f" {BLUE}[Auto] SMB Detected -> Selecting Share & Policy Enumeration{RESET}")
             args.shares = True
             args.policy = True
+            args.smb_users = True
         if 'ldap' in detected_services:
             print(f" {BLUE}[Auto] LDAP Detected -> Selecting Users, Computers, AS-REP Roast, ADCS{RESET}")
             args.users = True
@@ -228,7 +276,7 @@ def main():
         print("")
             
     # 1. SMB ENUMERATION
-    if args.shares or args.policy:
+    if args.shares or args.policy or args.smb_users:
         try:
             smb_enum = SMBEnumerator(
                 target=args.target, 
@@ -254,6 +302,12 @@ def main():
                             print(f"    Domain: {BLUE}{domain_name}{RESET}")
                             for k, v in policy.items():
                                 print(f"        {k}: {RED}{v}{RESET}")
+
+                if args.smb_users:
+                    print(f"\n{BLUE}[*] Performing SMB User Enumeration via SAMR:{RESET}")
+                    smb_users_found = smb_enum.enumerate_users()
+                    for u in smb_users_found:
+                        print(f"    - {BLUE}{u['username']}{RESET} (RID: {u['rid']}, Domain: {u['domain']})")
                 
                 smb_enum.close()
             else:
@@ -578,6 +632,53 @@ def main():
                 print(f"{RED}[-] Failed to connect to target for API enumeration.{RESET}")
         except Exception as e:
             print(f"{RED}[-] API Enumeration Error: {e}{RESET}")
+
+    # 10. DOMAIN / SUBDOMAIN ENUMERATION (SUBFINDER)
+    if getattr(args, 'subfinder', False):
+        try:
+            print(f"\n{BLUE}[*] Starting Subfinder Enumeration:{RESET}")
+            sub_enum = SubfinderEnumerator(target=args.target)
+            subs = sub_enum.enumerate()
+            if subs:
+                for sub in subs:
+                    print(f"    {GREEN}[+]{RESET} {sub}")
+            else:
+                print(f"    {GREY}[-] No subdomains found{RESET}")
+        except Exception as e:
+            print(f"{RED}[-] Subfinder Enumeration Error: {e}{RESET}")
+
+    # 11. DNS ENUMERATION
+    if getattr(args, 'dns_enum', False):
+        try:
+            print(f"\n{BLUE}[*] Starting DNS Enumeration:{RESET}")
+            dns_enum = DNSEnumerator(target=args.target)
+            results = dns_enum.enumerate()
+            for r in results:
+                print(f"    {GREEN}[+]{RESET} {r}")
+        except Exception as e:
+            print(f"{RED}[-] DNS Enumeration Error: {e}{RESET}")
+
+    # 12. SNMP ENUMERATION
+    if getattr(args, 'snmp_enum', False):
+        try:
+            print(f"\n{BLUE}[*] Starting SNMP Enumeration (Community: {args.snmp_community}):{RESET}")
+            snmp_enum = SNMPEnumerator(target=args.target, community=args.snmp_community)
+            results = snmp_enum.enumerate()
+            for r in results:
+                print(f"    {GREEN}[+]{RESET} {r}")
+        except Exception as e:
+            print(f"{RED}[-] SNMP Enumeration Error: {e}{RESET}")
+
+    # 13. RDP ENUMERATION
+    if getattr(args, 'rdp_enum', False):
+        try:
+            print(f"\n{BLUE}[*] Starting RDP Enumeration:{RESET}")
+            rdp_enum = RDPEnumerator(target=args.target)
+            results = rdp_enum.enumerate()
+            for r in results:
+                print(f"    {GREEN}[+]{RESET} {r}")
+        except Exception as e:
+            print(f"{RED}[-] RDP Enumeration Error: {e}{RESET}")
 
     print(f"\n{BLUE}[*] Enumeration Complete.{RESET}")
 
