@@ -234,7 +234,9 @@ def main():
             # HTTP/API detection
             if port in [80, 443, 8080, 8443, 8000, 5173, 4000] or 'http' in banner or 'server:' in banner or 'werkzeug' in banner or 'nginx' in banner or 'apache' in banner:
                 detected_services.add('http')
-                if port in [8080, 8443, 8000, 5173, 4000]:
+                if port in [80, 8080, 8000, 5173, 4000]:
+                    args.api_protocol = 'http'
+                if port in [8080, 8443, 8000, 5173, 4000, 80, 443]:
                     detected_services.add('api')
                     args.api_port = port
 

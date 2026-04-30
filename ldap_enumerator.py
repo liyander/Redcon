@@ -39,8 +39,11 @@ class LDAPEnumerator:
             self.ldap_conn = ldap_impacket.LDAPConnection(url, self.base_dn, self.target)
             
             if self.username == '' and self.password == '' and self.nthash == '':
-                self.logger.info("Attempting anonymous LDAP bind...")
-                self.ldap_conn.login('', '', '', '', '')
+                self.logger.info("Attempting anonymous LDAP bind (Simple)...")
+                try:
+                    self.ldap_conn.login('', '', authenticationChoice='simple')
+                except TypeError:
+                    self.ldap_conn.login('', '', '', '', '')
             else:
                 self.logger.info(f"Authenticating as {self.domain}\\{self.username}...")
                 try:
@@ -59,10 +62,69 @@ class LDAPEnumerator:
                         self.ldap_conn.login(bind_dn, self.password, '','')
                     except Exception as fallback_e:
                         self.logger.warning(f"Simple Bind fallback failed: {fallback_e}")
-                        self.logger.info("Falling back to Anonymous Bind...")
-                        self.ldap_conn.login('', '', '', '', '')
+                        self.logger.info("Falling back to Anonymous Bind (Simple)...")
+                        try:
+                            self.ldap_conn.login('', '', authenticationChoice='simple')
+                        except TypeError:
+                            self.ldap_conn.login('', '', '', '', '')
 
             self.logger.info("Successfully connected and authenticated via LDAP.")
+            
+            # Automatically discover base_dn if empty
+            if not self.base_dn:
+                self.logger.info("Base DN not provided. Attempting to discover defaultNamingContext...")
+                try:
+                    from impacket.ldap import ldapasn1 as ldapasn1_impacket
+                    # Root DSE must be queried with base object scope (searchScope=0)
+                    try:
+                        # Correct positional args for Impacket LDAPConnection.search:
+                        # searchFilter, attributes=None, searchBase=None, searchScope=2, sizeLimit=0
+                        res = self.ldap_conn.search(searchFilter='(objectClass=*)', attributes=['namingContexts', 'defaultNamingContext'], searchBase='', searchScope=0, sizeLimit=0)
+                    except TypeError as e:
+                        if "exceptions must derive" in str(e):
+                            raise e
+                        # Fallback for different parameter order just in case
+                        res = self.ldap_conn.search(searchFilter='(objectClass=*)', attributes=['namingContexts', 'defaultNamingContext'], searchBase='')
+                    for entry in res:
+                        if isinstance(entry, ldapasn1_impacket.SearchResultEntry):
+                            for attr in entry['attributes']:
+                                if str(attr['type']).lower() in ['namingcontexts', 'defaultnamingcontext']:
+                                    self.base_dn = str(attr['vals'][0])
+                                    self.logger.info(f"Discovered Base DN: {self.base_dn}")
+                                    # Try setting it if the library supports it
+                                    if hasattr(self.ldap_conn, '_baseDN'):
+                                        self.ldap_conn._baseDN = self.base_dn
+                                    elif hasattr(self.ldap_conn, 'baseDN'):
+                                        self.ldap_conn.baseDN = self.base_dn
+                                    break
+                except TypeError as e:
+                    if "exceptions must derive from BaseException" in str(e) or "coerc" in str(e):
+                        self.logger.warning("Failed to discover Base DN automatically (Server block/Impacket error).")
+                    else:
+                        self.logger.warning(f"Failed to discover Base DN automatically (TypeError): {e}")
+                except Exception as e:
+                    if "PyAsn1Error" in str(type(e)) or "coerc" in str(e):
+                        self.logger.warning("Failed to discover Base DN automatically (PyAsn1 format mismatch).")
+                    else:
+                        self.logger.warning(f"Failed to discover Base DN automatically: {e}")
+                        
+                # CLI fallback for base DN discovery if empty
+                if not self.base_dn:
+                    import subprocess
+                    try:
+                        self.logger.info("Attempting CLI fallback (ldapsearch) to map naming contexts...")
+                        cmd = ['ldapsearch', '-x', '-H', f'ldap://{self.target}', '-b', '', '-s', 'base', 'namingContexts']
+                        out = subprocess.check_output(cmd, stderr=subprocess.STDOUT, timeout=5).decode(errors='ignore')
+                        for line in out.split('\n'):
+                            if line.lower().startswith('namingcontexts:'):
+                                self.base_dn = line.split(':', 1)[1].strip()
+                                self.logger.info(f"Discovered Base DN via ldapsearch: {self.base_dn}")
+                                if hasattr(self.ldap_conn, '_baseDN'): self.ldap_conn._baseDN = self.base_dn
+                                elif hasattr(self.ldap_conn, 'baseDN'): self.ldap_conn.baseDN = self.base_dn
+                                break
+                    except Exception as e:
+                        self.logger.warning(f"CLI Base DN fallback failed: {e}")
+
             return True
 
         except ldap_impacket.LDAPSessionError as e:
@@ -82,25 +144,73 @@ class LDAPEnumerator:
             return []
 
         self.logger.info("Enumerating domain users...")
-        search_filter = "(&(objectCategory=person)(objectClass=user))"
-        attributes = ['sAMAccountName', 'description', 'userAccountControl']
+        search_filter = "(objectClass=person)"
+        attributes = ['sAMAccountName', 'description', 'userAccountControl', 'cn']
         
         users = []
         try:
-            results = self.ldap_conn.search(searchFilter=search_filter, attributes=attributes, sizeLimit=0)
+            results = self.ldap_conn.search(searchFilter=search_filter, attributes=attributes, searchBase=self.base_dn, sizeLimit=0)
             from impacket.ldap import ldapasn1 as ldapasn1_impacket
             for entry in results:
                 if isinstance(entry, ldapasn1_impacket.SearchResultEntry):
                     user_data = {str(attr['type']).lower(): str(attr['vals'][0]) for attr in entry['attributes']}
                     # Default values
-                    username = user_data.get('samaccountname', 'Unknown')
+                    username = user_data.get('samaccountname', user_data.get('cn', 'Unknown'))
                     description = user_data.get('description', '')
                     users.append({'username': username, 'description': description})
                     self.logger.info(f"Found User: {username} - {description}")
             return users
-        except Exception as e:
-            self.logger.error(f"Error enumerating users: {e}")
+        except TypeError as e:
+            if "exceptions must derive from BaseException" in str(e):
+                self.logger.error("LDAP search failed: The server likely rejected the query (e.g., anonymous access denied). [Impacket Error]")
+                self._fallback_enumerate_users(users)
+            else:
+                self.logger.error(f"Type Error enumerating users: {e}")
             return users
+        except Exception as e:
+            if "PyAsn1Error" in str(type(e)) or "coerc" in str(e):
+                self.logger.error(f"PyAsn1 format mismatch enumerating users.")
+                self._fallback_enumerate_users(users)
+            else:
+                self.logger.error(f"Error enumerating users: {e}")
+            return users
+
+    def _fallback_enumerate_users(self, users):
+        import subprocess
+        try:
+            self.logger.info("Attempting CLI fallback (ldapsearch) to enumerate users...")
+            cmd = ['ldapsearch', '-x', '-H', f'ldap://{self.target}']
+            if self.base_dn:
+                cmd.extend(['-b', self.base_dn])
+            cmd.append('(objectClass=person)')
+            
+            out = subprocess.check_output(cmd, stderr=subprocess.STDOUT, timeout=10).decode(errors='ignore')
+            current_user = {}
+            for line in out.split('\n'):
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    if current_user and current_user.get('username'):
+                        users.append(current_user)
+                        current_user = {}
+                    continue
+                if ': ' in line:
+                    k, v = line.split(': ', 1)
+                    if k.lower() in ('uid', 'cn', 'samaccountname'):
+                        current_user['username'] = v
+                        if k.lower() == 'uid': # Prefer uid if available
+                            current_user['username_uid'] = v
+                    elif k.lower() in ('description', 'title'):
+                        current_user['description'] = v
+            if current_user and current_user.get('username'):
+                users.append(current_user)
+            
+            for u in users:
+                if 'username_uid' in u:
+                    u['username'] = u.pop('username_uid')
+                u.setdefault('description', '')
+                self.logger.info(f"Found User (CLI): {u.get('username')} - {u.get('description')}")
+        except Exception as e:
+            self.logger.error(f"CLI User enumeration fallback failed: {e}")
 
     def get_whoami_info(self, target_user=None):
         """Get detailed LDAP properties of the authenticated user or a specific user."""
@@ -114,7 +224,7 @@ class LDAPEnumerator:
             return None
 
         self.logger.info(f"Querying detailed AD properties for user: {username_to_search}...")
-        search_filter = f"(&(objectCategory=person)(objectClass=user)(sAMAccountName={username_to_search}))"
+        search_filter = f"(&(objectClass=person)(|(sAMAccountName={username_to_search})(cn={username_to_search})))"
         attributes = [
             "name", "sAMAccountName", "description", "distinguishedName",
             "pwdLastSet", "lastLogon", "userAccountControl", "servicePrincipalName",
@@ -122,7 +232,7 @@ class LDAPEnumerator:
         ]
         
         try:
-            results = self.ldap_conn.search(searchFilter=search_filter, attributes=attributes, sizeLimit=0)
+            results = self.ldap_conn.search(searchFilter=search_filter, attributes=attributes, searchBase=self.base_dn, sizeLimit=0)
             from impacket.ldap import ldapasn1 as ldapasn1_impacket
             
             for entry in results:
@@ -135,6 +245,12 @@ class LDAPEnumerator:
                     return user_params
             
             self.logger.warning(f"No user found matching sAMAccountName={username_to_search}")
+            return None
+        except TypeError as e:
+            if "exceptions must derive from BaseException" in str(e):
+                self.logger.error("LDAP search failed: The server likely rejected the query (e.g., anonymous access denied). [Impacket Error]")
+            else:
+                self.logger.error(f"Type Error querying whoami: {e}")
             return None
         except Exception as e:
             self.logger.error(f"Error querying whoami for {username_to_search}: {e}")
@@ -152,7 +268,7 @@ class LDAPEnumerator:
         
         computers = []
         try:
-            results = self.ldap_conn.search(searchFilter=search_filter, attributes=attributes, sizeLimit=0)
+            results = self.ldap_conn.search(searchFilter=search_filter, attributes=attributes, searchBase=self.base_dn, sizeLimit=0)
             from impacket.ldap import ldapasn1 as ldapasn1_impacket
             for entry in results:
                 if isinstance(entry, ldapasn1_impacket.SearchResultEntry):
@@ -161,6 +277,12 @@ class LDAPEnumerator:
                     dns_name = comp_data.get('dnshostname', '')
                     computers.append({'name': name, 'dns_name': dns_name})
                     self.logger.info(f"Found Computer: {name} (DNS: {dns_name})")
+            return computers
+        except TypeError as e:
+            if "exceptions must derive from BaseException" in str(e):
+                self.logger.error("LDAP search failed: The server likely rejected the query (e.g., anonymous access denied). [Impacket Error]")
+            else:
+                self.logger.error(f"Type Error enumerating computers: {e}")
             return computers
         except Exception as e:
             self.logger.error(f"Error enumerating computers: {e}")
@@ -179,7 +301,7 @@ class LDAPEnumerator:
         
         users = []
         try:
-            results = self.ldap_conn.search(searchFilter=search_filter, attributes=attributes, sizeLimit=0)
+            results = self.ldap_conn.search(searchFilter=search_filter, attributes=attributes, searchBase=self.base_dn, sizeLimit=0)
             from impacket.ldap import ldapasn1 as ldapasn1_impacket
             for entry in results:
                 if isinstance(entry, ldapasn1_impacket.SearchResultEntry):
@@ -188,6 +310,12 @@ class LDAPEnumerator:
                     upn = user_data.get('userprincipalname', '')
                     users.append({'username': username, 'upn': upn})
                     self.logger.highlight(f"VULNERABLE AS-REP ROASTABLE USER IDENTIFIED: {username} ({upn})") if hasattr(self.logger, 'highlight') else self.logger.error(f"AS-REP ROASTABLE USER: {username} ({upn})")
+            return users
+        except TypeError as e:
+            if "exceptions must derive from BaseException" in str(e):
+                self.logger.error("LDAP search failed: The server likely rejected the query (e.g., anonymous access denied). [Impacket Error]")
+            else:
+                self.logger.error(f"Type Error enumerating AS-REP roastable users: {e}")
             return users
         except Exception as e:
             self.logger.error(f"Error enumerating AS-REP roastable users: {e}")

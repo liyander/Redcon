@@ -38,8 +38,12 @@ class APIEnumerator:
         try:
             req = urllib.request.Request(self.base_url)
             req.add_header('User-Agent', 'Mozilla/5.0')
-
-            opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=self.ssl_context))
+            
+            if self.protocol == 'https':
+                opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=self.ssl_context))
+            else:
+                opener = urllib.request.build_opener(urllib.request.HTTPHandler())
+                
             response = opener.open(req, timeout=self.timeout)
 
             self.logger.info(f"Successfully connected to {self.base_url}")
@@ -186,7 +190,11 @@ class APIEnumerator:
                 credentials = base64.b64encode(f"{self.username}:{self.password}".encode()).decode()
                 req.add_header('Authorization', f'Basic {credentials}')
 
-            opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=self.ssl_context))
+            if url.startswith('https'):
+                opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=self.ssl_context))
+            else:
+                opener = urllib.request.build_opener(urllib.request.HTTPHandler())
+            
             response = opener.open(req, timeout=self.timeout)
 
             status_code = response.status
@@ -258,7 +266,11 @@ class APIEnumerator:
             req.add_header('Origin', 'https://attacker.com')
             req.add_header('Access-Control-Request-Method', 'POST')
 
-            opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=self.ssl_context))
+            if url.startswith('https'):
+                opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=self.ssl_context))
+            else:
+                opener = urllib.request.build_opener(urllib.request.HTTPHandler())
+            
             response = opener.open(req, timeout=self.timeout)
 
             allow_origin = response.headers.get('Access-Control-Allow-Origin', '')
@@ -310,7 +322,10 @@ class APIEnumerator:
             req.add_header('Authorization', f'Basic {credentials}')
             req.add_header('User-Agent', 'Mozilla/5.0')
 
-            opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=self.ssl_context))
+            if url.startswith('https'):
+                opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=self.ssl_context))
+            else:
+                opener = urllib.request.build_opener(urllib.request.HTTPHandler())
             response = opener.open(req, timeout=self.timeout)
 
             return response.status == 200
